@@ -1,6 +1,6 @@
-# Claude Status Plugin
+# Clawde Plugin
 
-A [Claude Code plugin](https://docs.anthropic.com/en/docs/claude-code/plugins) for the [Claude Status](https://github.com/gmr/claude-status) macOS menu bar app. It reports real-time session state so the menu bar icon reflects what Claude Code is doing.
+A [Claude Code plugin](https://docs.anthropic.com/en/docs/claude-code/plugins) for the [Clawde](https://github.com/burakCokyildirim/clawde) macOS menu bar app. It reports real-time session state so the menu bar icon reflects what Claude Code is doing.
 
 ## How It Works
 
@@ -40,7 +40,7 @@ Only 4 hooks are registered (down from 12 in the Python version) because the dae
 Install via the Claude Code marketplace:
 
 ```bash
-claude plugins install gmr/claude-status-plugin
+claude plugins install burakCokyildirim/clawde-plugin
 ```
 
 Or add manually to your Claude Code plugin configuration.
@@ -48,7 +48,7 @@ Or add manually to your Claude Code plugin configuration.
 ## Requirements
 
 - macOS (uses Darwin notifications and libproc FFI)
-- [Claude Status](https://github.com/gmr/claude-status) menu bar app
+- [Clawde](https://github.com/burakCokyildirim/clawde) menu bar app
 
 ## License
 

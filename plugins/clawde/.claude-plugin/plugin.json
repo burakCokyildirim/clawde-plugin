@@ -1,0 +1,23 @@
+{
+  "name": "clawde",
+  "version": "3.0.0",
+  "description": "Reports Claude Code session status to Clawde, the macOS desktop pet",
+  "author": {
+    "name": "Burak Çokyıldırım",
+    "url": "https://github.com/burakCokyildirim"
+  },
+  "repository": "https://github.com/burakCokyildirim/clawde-plugin",
+  "homepage": "https://github.com/burakCokyildirim/clawde",
+  "license": "BSD-3-Clause",
+  "keywords": [
+    "status",
+    "session",
+    "macos",
+    "menu-bar",
+    "monitoring",
+    "pet"
+  ],
+  "skills": [
+    "./skills/session-name"
+  ]
+}

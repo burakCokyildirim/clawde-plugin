@@ -2,14 +2,14 @@
 name: session-name
 description: >-
   Set a custom name for the current Claude Code session that appears in the
-  Claude Status menu bar app. Use when the user says "/name-session",
+  Clawde menu bar app. Use when the user says "/name-session",
   "name this session", "set session name", or "rename session".
 allowed-tools: Bash(bash:*)
 ---
 
 # Set Session Name
 
-Sets a custom display name for the current Claude Code session in the Claude Status macOS menu bar app.
+Sets a custom display name for the current Claude Code session in the Clawde, the macOS desktop pet.
 
 ## Usage
 

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Rust implementation of the Claude Status plugin hook scripts. This repo serves as both a Claude Code **marketplace** and a **plugin** for the [Claude Status](https://github.com/gmr/claude-status) macOS menu bar app.
+Rust implementation of the Clawde plugin hook scripts. This repo serves as both a Claude Code **marketplace** and a **plugin** for the [Clawde](https://github.com/burakCokyildirim/clawde) macOS menu bar app.
 
 The plugin provides two Rust binaries:
 - **session-status** — Daemon that tails JSONL transcripts, maintains a state machine, and writes `.cstatus` JSON files
@@ -24,10 +24,10 @@ cargo test -p session-status
 After building, copy binaries and re-sign them (required to clear `com.apple.provenance` xattr that causes Gatekeeper kills):
 
 ```bash
-cp target/release/session-status plugins/claude-status/scripts/session-status
-cp target/release/set-session-name plugins/claude-status/scripts/set-session-name
-codesign -fs - plugins/claude-status/scripts/session-status
-codesign -fs - plugins/claude-status/scripts/set-session-name
+cp target/release/session-status plugins/clawde/scripts/session-status
+cp target/release/set-session-name plugins/clawde/scripts/set-session-name
+codesign -fs - plugins/clawde/scripts/session-status
+codesign -fs - plugins/clawde/scripts/set-session-name
 ```
 
 ## Repository Layout
@@ -46,7 +46,7 @@ crates/
 .claude-plugin/
   marketplace.json                      # Marketplace definition
 
-plugins/claude-status/                  # Plugin distributed to users
+plugins/clawde/                  # Plugin distributed to users
   .claude-plugin/
     plugin.json                         # Plugin metadata
   hooks/
@@ -117,9 +117,9 @@ The daemon reads JSONL lines and derives state. Key patterns:
 |---------|-----------|---------|
 | stdin (JSON) | Claude Code → session-status | Hook event payload |
 | argv | Claude Code → set-session-name | Session name argument |
-| `.cstatus` file | binaries → Claude Status app | Session state on disk |
+| `.cstatus` file | binaries → Clawde app | Session state on disk |
 | `.csignal` file | signal hooks → daemon | UI-only events not in JSONL |
-| Darwin notification | binaries → Claude Status app | Instant refresh signal |
+| Darwin notification | binaries → Clawde app | Instant refresh signal |
 | `CLAUDE_PID` env var | Claude Code → binaries | PID of the Claude Code process |
 
 ### Session States
@@ -143,7 +143,7 @@ Optional `session_name` field preserved across writes if present.
 
 Before creating a release, you **MUST** update the version in all three locations:
 
-1. `plugins/claude-status/.claude-plugin/plugin.json` — the `"version"` field
+1. `plugins/clawde/.claude-plugin/plugin.json` — the `"version"` field
 2. `.claude-plugin/marketplace.json` — the `"version"` field in the plugin entry
 3. `Cargo.toml` workspace members (if the Cargo version is being bumped)
 

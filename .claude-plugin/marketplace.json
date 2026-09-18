@@ -1,23 +1,23 @@
 {
-  "name": "claude-status-marketplace",
+  "name": "clawde-marketplace",
   "owner": {
-    "name": "Gavin M. Roy",
-    "email": "gavinmroy@gmail.com"
+    "name": "Burak Çokyıldırım",
+    "url": "https://github.com/burakCokyildirim"
   },
   "metadata": {
-    "description": "Plugin marketplace for the Claude Status macOS menu bar app"
+    "description": "Plugin marketplace for Clawde, the macOS desktop pet for Claude Code sessions"
   },
   "plugins": [
     {
-      "name": "claude-status",
-      "source": "./plugins/claude-status",
-      "description": "Reports Claude Code session status for the Claude Status macOS menu bar app",
-      "version": "2.0.5",
+      "name": "clawde",
+      "source": "./plugins/clawde",
+      "description": "Reports Claude Code session status to Clawde, the macOS desktop pet",
+      "version": "3.0.0",
       "author": {
-        "name": "Gavin M. Roy",
-        "url": "https://github.com/gmr"
+        "name": "Burak Çokyıldırım",
+        "url": "https://github.com/burakCokyildirim"
       },
-      "repository": "https://github.com/gmr/claude-status-plugin",
+      "repository": "https://github.com/burakCokyildirim/clawde-plugin",
       "license": "BSD-3-Clause",
       "keywords": [
         "status",

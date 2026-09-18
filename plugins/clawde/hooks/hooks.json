@@ -1,5 +1,5 @@
 {
-  "description": "Writes session status to ~/.claude/projects/<project>/<session-id>.cstatus for the Claude Status macOS app",
+  "description": "Writes session status to ~/.claude/projects/<project>/<session-id>.cstatus for the Clawde",
   "hooks": {
     "SessionStart": [
       {

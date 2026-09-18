@@ -12,7 +12,7 @@ unsafe extern "C" {
     fn notify_post(name: *const std::ffi::c_char) -> u32;
 }
 
-const NOTIFICATION_NAME: &str = "com.poisonpenllc.Claude-Status.session-changed";
+const NOTIFICATION_NAME: &str = "com.burakcokyildirim.clawde.session-changed";
 const MAX_PID_WALK: usize = 8;
 
 fn post_darwin_notification() {

@@ -32,8 +32,8 @@ fmt-check:
 
 # Build and install binaries to the plugin scripts directory
 install: build
-    cp target/release/session-status plugins/claude-status/scripts/
-    cp target/release/set-session-name plugins/claude-status/scripts/
+    cp target/release/session-status plugins/clawde/scripts/
+    cp target/release/set-session-name plugins/clawde/scripts/
 
 # Clean build artifacts
 clean:
@@ -41,18 +41,18 @@ clean:
 
 # Show current version from plugin.json
 version:
-    @jq -r '.version' plugins/claude-status/.claude-plugin/plugin.json
+    @jq -r '.version' plugins/clawde/.claude-plugin/plugin.json
 
 # Bump version across all version files (usage: just bump 2.1.0)
 bump new_version:
     #!/usr/bin/env bash
     set -euo pipefail
-    old=$(jq -r '.version' plugins/claude-status/.claude-plugin/plugin.json)
+    old=$(jq -r '.version' plugins/clawde/.claude-plugin/plugin.json)
     echo "Bumping version: ${old} → {{ new_version }}"
     # Plugin JSON files
     jq --arg v "{{ new_version }}" '.version = $v' \
-        plugins/claude-status/.claude-plugin/plugin.json > /tmp/plugin.json \
-        && mv /tmp/plugin.json plugins/claude-status/.claude-plugin/plugin.json
+        plugins/clawde/.claude-plugin/plugin.json > /tmp/plugin.json \
+        && mv /tmp/plugin.json plugins/clawde/.claude-plugin/plugin.json
     jq --arg v "{{ new_version }}" '.plugins[0].version = $v' \
         .claude-plugin/marketplace.json > /tmp/marketplace.json \
         && mv /tmp/marketplace.json .claude-plugin/marketplace.json
@@ -61,7 +61,7 @@ bump new_version:
         crates/session-status/Cargo.toml \
         crates/set-session-name/Cargo.toml
     echo "Updated version to {{ new_version }} in:"
-    echo "  - plugins/claude-status/.claude-plugin/plugin.json"
+    echo "  - plugins/clawde/.claude-plugin/plugin.json"
     echo "  - .claude-plugin/marketplace.json"
     echo "  - crates/session-status/Cargo.toml"
     echo "  - crates/set-session-name/Cargo.toml"

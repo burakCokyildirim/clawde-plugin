@@ -15,7 +15,7 @@ unsafe extern "C" {
     fn notify_post(name: *const std::ffi::c_char) -> u32;
 }
 
-const NOTIFICATION_NAME: &str = "com.poisonpenllc.Claude-Status.session-changed";
+const NOTIFICATION_NAME: &str = "com.burakcokyildirim.clawde.session-changed";
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 // ---------------------------------------------------------------------------
@@ -975,7 +975,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn print_help() {
     eprintln!("session-status {VERSION}");
-    eprintln!("Claude Status plugin hook daemon for the Claude Status macOS menu bar app");
+    eprintln!("Clawde plugin hook daemon for the Clawde macOS desktop pet");
     eprintln!();
     eprintln!("USAGE:");
     eprintln!(
@@ -991,7 +991,7 @@ fn print_help() {
     eprintln!("  -V, --version    Print version");
     eprintln!();
     eprintln!("This binary is not intended to be run manually. It is invoked by Claude Code");
-    eprintln!("hooks registered in plugins/claude-status/hooks/hooks.json.");
+    eprintln!("hooks registered in plugins/clawde/hooks/hooks.json.");
 }
 
 fn read_stdin_json() -> Result<Value, String> {
