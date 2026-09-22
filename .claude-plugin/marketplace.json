@@ -12,7 +12,7 @@
       "name": "clawde",
       "source": "./plugins/clawde",
       "description": "Reports Claude Code session status to Clawde, the macOS desktop pet",
-      "version": "3.1.1",
+      "version": "3.1.2",
       "author": {
         "name": "Burak Çokyıldırım",
         "url": "https://github.com/burakCokyildirim"
