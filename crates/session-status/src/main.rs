@@ -190,6 +190,31 @@ fn block_is_interrupt(block: &Value) -> bool {
     }
 }
 
+/// The text a user line says, whether its content is a string or text blocks.
+fn user_line_text(message: &Value) -> &str {
+    match message.get("content") {
+        Some(Value::String(text)) => text,
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .find_map(|b| b.get("text").and_then(|t| t.as_str()))
+            .unwrap_or(""),
+        _ => "",
+    }
+}
+
+/// What a session was doing before a slash command it cannot yet tell apart
+/// from a prompt. `/goal` goes on to the model; `/model` runs in Claude Code and
+/// only writes its output back. Both are recorded as a `<command-name>` line
+/// carrying a promptId, and only the line after says which one it was.
+struct BeforeCommand {
+    state: SessionState,
+    activity: String,
+    active_agents: HashSet<String>,
+    background_tasks: HashSet<String>,
+    open_tool_calls: HashMap<String, String>,
+    awaiting_permission_for: Option<String>,
+}
+
 /// Every `<tool-use-id>` a line carries, in order.
 fn tool_use_ids(line: &str) -> Vec<String> {
     const OPEN: &str = "<tool-use-id>";
@@ -228,6 +253,9 @@ struct DaemonState {
     /// The tool a permission prompt is waiting on. Answering the prompt lets that
     /// call run, and its result is the first thing the transcript records.
     awaiting_permission_for: Option<String>,
+    /// Set by a slash command's line until the next line says whether it
+    /// reached the model; a local command's output puts all of this back.
+    before_command: Option<BeforeCommand>,
 }
 
 impl DaemonState {
@@ -242,6 +270,7 @@ impl DaemonState {
             compacting: false,
             open_tool_calls: HashMap::new(),
             awaiting_permission_for: None,
+            before_command: None,
         }
     }
 
@@ -272,7 +301,10 @@ impl DaemonState {
         }
 
         match line_type {
-            "assistant" => self.process_assistant(&v),
+            "assistant" => {
+                self.before_command = None;
+                self.process_assistant(&v)
+            }
             "user" => {
                 if self.compacting {
                     // Suppress replayed context during compaction
@@ -485,6 +517,20 @@ impl DaemonState {
 
         self.event = "user".to_string();
 
+        // A local command's output carries a promptId, as a prompt does, but
+        // nothing reaches the model: the command line before it began no turn.
+        let text = user_line_text(message).trim_start();
+        if text.starts_with("<local-command-stdout>") || text.starts_with("<local-command-stderr>")
+        {
+            if let Some(before) = self.before_command.take()
+                && self.state == SessionState::Active
+                && self.activity == "thinking"
+            {
+                self.restore(before);
+            }
+            return;
+        }
+
         // A stop is recorded as a user line that carries a promptId, so it would
         // otherwise read as a fresh prompt and leave the session "thinking" with
         // nothing left to answer it — or, at a permission prompt, as the prompt
@@ -505,11 +551,12 @@ impl DaemonState {
         }
 
         // Only transition to "thinking" for real user prompts (which have promptId).
-        // Local command output (e.g. /plugin, /reload-plugins) generates user messages
-        // without promptId that should not change state.
+        // Older Claude Code versions wrote local command output (e.g. /plugin,
+        // /reload-plugins) without one; newer ones add it, and are handled above.
         let is_real_prompt = v.get("promptId").is_some_and(|p| !p.is_null());
 
         if has_text && !has_tool_result && is_real_prompt {
+            self.before_command = text.starts_with("<command-name>").then(|| self.snapshot());
             // A new user prompt means any pending agents from the previous
             // turn were cancelled/interrupted — clear stale tracking.
             self.active_agents.clear();
@@ -557,6 +604,26 @@ impl DaemonState {
         }
     }
 
+    fn snapshot(&self) -> BeforeCommand {
+        BeforeCommand {
+            state: self.state.clone(),
+            activity: self.activity.clone(),
+            active_agents: self.active_agents.clone(),
+            background_tasks: self.background_tasks.clone(),
+            open_tool_calls: self.open_tool_calls.clone(),
+            awaiting_permission_for: self.awaiting_permission_for.clone(),
+        }
+    }
+
+    fn restore(&mut self, before: BeforeCommand) {
+        self.state = before.state;
+        self.activity = before.activity;
+        self.active_agents = before.active_agents;
+        self.background_tasks = before.background_tasks;
+        self.open_tool_calls = before.open_tool_calls;
+        self.awaiting_permission_for = before.awaiting_permission_for;
+    }
+
     /// Lets go of whatever the replayed transcript says was still going on.
     ///
     /// The transcript can end mid-turn: the Claude desktop app evicts idle
@@ -573,6 +640,7 @@ impl DaemonState {
         self.open_tool_calls.clear();
         self.awaiting_permission_for = None;
         self.compacting = false;
+        self.before_command = None;
         let asked = self.state == SessionState::Waiting && self.activity == "question";
         if self.state != SessionState::Idle && !asked {
             self.state = SessionState::Idle;
@@ -1379,6 +1447,91 @@ mod tests {
         assert_eq!(s.activity, "");
     }
 
+    /// A slash command as the Claude desktop app records it: every line carries
+    /// the promptId, content as a string. Taken from a real `/model` run.
+    fn make_command_lines(name: &str, output: Option<&str>) -> Vec<String> {
+        let line = |content: String, meta: bool| {
+            let mut v = serde_json::json!({
+                "type": "user",
+                "promptId": "29c73400-f99f-49d3-8467-3a81fea0c26f",
+                "message": {"role": "user", "content": content}
+            });
+            if meta {
+                v["isMeta"] = serde_json::json!(true);
+            }
+            v.to_string()
+        };
+        let mut lines = vec![
+            line(
+                "<local-command-caveat>Caveat: The messages below were generated by the user while running local commands.</local-command-caveat>".to_string(),
+                true,
+            ),
+            line(
+                format!(
+                    "<command-name>/{name}</command-name>\n            <command-message>{name}</command-message>\n            <command-args></command-args>"
+                ),
+                false,
+            ),
+        ];
+        if let Some(output) = output {
+            lines.push(line(
+                format!("<local-command-stdout>{output}</local-command-stdout>"),
+                false,
+            ));
+        }
+        lines
+    }
+
+    #[test]
+    fn a_local_command_is_not_a_turn() {
+        let mut s = DaemonState::new();
+        for line in make_command_lines("model", Some("Set model to `claude-opus-5-5`")) {
+            s.process_line(&line);
+        }
+        assert_eq!(s.state, SessionState::Idle);
+        assert_eq!(s.activity, "");
+    }
+
+    #[test]
+    fn a_local_command_leaves_a_question_standing() {
+        let mut s = DaemonState::new();
+        s.process_line(&make_end_turn("Shall I ship it?"));
+        for line in make_command_lines("model", Some("Set model to `claude-opus-5-5`")) {
+            s.process_line(&line);
+        }
+        assert_eq!(s.state, SessionState::Waiting);
+        assert_eq!(s.activity, "question");
+    }
+
+    #[test]
+    fn a_local_command_does_not_forget_background_work() {
+        let mut s = DaemonState::new();
+        s.process_line(&make_background_launch("toolu_bash1"));
+        s.process_line(&make_tool_result("toolu_bash1"));
+        s.process_line(&make_end_turn("Watching the run."));
+        for line in make_command_lines("model", Some("Set model to `claude-opus-5-5`")) {
+            s.process_line(&line);
+        }
+        assert_eq!(s.state, SessionState::Active);
+        assert_eq!(s.activity, "background");
+
+        s.process_line(&make_task_notification("toolu_bash1"));
+        assert_eq!(s.state, SessionState::Idle);
+    }
+
+    #[test]
+    fn a_command_that_reaches_the_model_is_a_turn() {
+        let mut s = DaemonState::new();
+        for line in make_command_lines("goal", None) {
+            s.process_line(&line);
+        }
+        assert_eq!(s.state, SessionState::Active);
+        assert_eq!(s.activity, "thinking");
+
+        s.process_line(&make_assistant_streaming());
+        assert_eq!(s.state, SessionState::Active);
+    }
+
     #[test]
     fn assistant_streaming_sets_active() {
         let mut s = DaemonState::new();
@@ -1688,7 +1841,10 @@ mod tests {
     #[test]
     fn ids_are_read_out_of_the_line_as_written() {
         let line = "<task-notification>\n<tool-use-id>toolu_a</tool-use-id>\n<tool-use-id> toolu_b </tool-use-id>";
-        assert_eq!(tool_use_ids(line), vec!["toolu_a".to_string(), "toolu_b".to_string()]);
+        assert_eq!(
+            tool_use_ids(line),
+            vec!["toolu_a".to_string(), "toolu_b".to_string()]
+        );
         assert!(tool_use_ids("nothing here").is_empty());
         assert!(tool_use_ids("<tool-use-id>unclosed").is_empty());
     }
