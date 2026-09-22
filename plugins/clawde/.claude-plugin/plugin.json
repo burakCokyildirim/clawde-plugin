@@ -1,6 +1,6 @@
 {
   "name": "clawde",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Reports Claude Code session status to Clawde, the macOS desktop pet",
   "author": {
     "name": "Burak Çokyıldırım",

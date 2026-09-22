@@ -190,11 +190,33 @@ fn block_is_interrupt(block: &Value) -> bool {
     }
 }
 
+/// Every `<tool-use-id>` a line carries, in order.
+fn tool_use_ids(line: &str) -> Vec<String> {
+    const OPEN: &str = "<tool-use-id>";
+    const CLOSE: &str = "</tool-use-id>";
+    let mut ids = Vec::new();
+    let mut rest = line;
+    while let Some(start) = rest.find(OPEN) {
+        rest = &rest[start + OPEN.len()..];
+        let Some(end) = rest.find(CLOSE) else { break };
+        let id = rest[..end].trim();
+        if !id.is_empty() {
+            ids.push(id.to_string());
+        }
+        rest = &rest[end + CLOSE.len()..];
+    }
+    ids
+}
+
 struct DaemonState {
     state: SessionState,
     activity: String,
     event: String,
     active_agents: HashSet<String>,
+    /// Tool calls the session let go of and will be woken by: a background Bash
+    /// command, a workflow. The call reports back at once saying it is running,
+    /// so nothing else says the session is not finished with its turn.
+    background_tasks: HashSet<String>,
     session_name: Option<String>,
     /// Set when compact_boundary fires. Suppresses state changes from replayed
     /// context (user messages, progress) until the next real assistant response.
@@ -215,6 +237,7 @@ impl DaemonState {
             activity: String::new(),
             event: String::new(),
             active_agents: HashSet::new(),
+            background_tasks: HashSet::new(),
             session_name: None,
             compacting: false,
             open_tool_calls: HashMap::new(),
@@ -233,6 +256,14 @@ impl DaemonState {
 
         let old_state = self.state.clone();
         let old_activity = self.activity.clone();
+
+        // A task the session was let go by finishing is announced, not returned:
+        // the call it came from already reported back. The announcement carries
+        // that call's id, and arrives on more than one line type, so it is taken
+        // from the line itself rather than from any one of them.
+        if line.contains("<task-notification>") {
+            self.finish_tasks(line);
+        }
 
         // Skip meta messages (local command output, plugin commands, etc.)
         // These are not real user/assistant turns and should not affect state.
@@ -312,6 +343,14 @@ impl DaemonState {
                 if name == "Agent" {
                     self.active_agents.insert(id.to_string());
                 }
+                if block
+                    .get("input")
+                    .and_then(|i| i.get("run_in_background"))
+                    .and_then(|b| b.as_bool())
+                    .unwrap_or(false)
+                {
+                    self.background_tasks.insert(id.to_string());
+                }
                 self.open_tool_calls
                     .insert(id.to_string(), name.to_string());
             }
@@ -347,10 +386,15 @@ impl DaemonState {
                 self.activity = tool_name;
             }
             "end_turn" => {
-                if !self.active_agents.is_empty() {
-                    // Agents still running — stay active
+                if !self.active_agents.is_empty() || !self.background_tasks.is_empty() {
+                    // Work the session will be woken by is still running, so the
+                    // turn ending is not the session going quiet.
                     self.state = SessionState::Active;
-                    self.activity = "subagent".to_string();
+                    self.activity = if self.active_agents.is_empty() {
+                        "background".to_string()
+                    } else {
+                        "subagent".to_string()
+                    };
                 } else {
                     // Question detection on the message we just parsed
                     if self.detect_question(content) {
@@ -452,6 +496,7 @@ impl DaemonState {
                 .is_some_and(is_interrupt_marker);
         if interrupted {
             self.active_agents.clear();
+            self.background_tasks.clear();
             self.open_tool_calls.clear();
             self.awaiting_permission_for = None;
             self.state = SessionState::Idle;
@@ -468,6 +513,7 @@ impl DaemonState {
             // A new user prompt means any pending agents from the previous
             // turn were cancelled/interrupted — clear stale tracking.
             self.active_agents.clear();
+            self.background_tasks.clear();
             self.open_tool_calls.clear();
             self.awaiting_permission_for = None;
             self.state = SessionState::Active;
@@ -511,6 +557,37 @@ impl DaemonState {
         }
     }
 
+    /// Takes the finished call's id out of whatever it was being tracked as, and
+    /// lets the session go quiet once the last one is done.
+    ///
+    /// The line is searched rather than parsed: the announcement reaches the
+    /// transcript as a `queue-operation` and again as a `user` line, and only
+    /// the id inside it matters.
+    fn finish_tasks(&mut self, line: &str) {
+        let mut finished = false;
+        for id in tool_use_ids(line) {
+            finished |= self.active_agents.remove(&id) | self.background_tasks.remove(&id);
+        }
+        // Only the session left waiting on that work is this one's to change;
+        // anything the model is doing now speaks for itself.
+        let waiting_on_work = self.state == SessionState::Active
+            && (self.activity == "subagent" || self.activity == "background");
+        if !finished || !waiting_on_work {
+            return;
+        }
+        self.event = "task_finished".to_string();
+        if !self.active_agents.is_empty() {
+            self.activity = "subagent".to_string();
+        } else if !self.background_tasks.is_empty() {
+            self.activity = "background".to_string();
+        } else {
+            // The last of it is done and the turn is long over: nothing else
+            // will say the session has gone quiet.
+            self.state = SessionState::Idle;
+            self.activity = String::new();
+        }
+    }
+
     fn process_system(&mut self, v: &Value) {
         let subtype = v.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
 
@@ -528,6 +605,7 @@ impl DaemonState {
                 // turn_duration fires after a turn completes. Any agents
                 // still tracked are stale (e.g. user cancelled/interrupted).
                 self.active_agents.clear();
+                self.background_tasks.clear();
                 // If we're still in Active state (e.g. the final assistant
                 // message had stop_reason: null from streaming, or stale
                 // agents kept us active), transition to idle.
@@ -1130,6 +1208,37 @@ mod tests {
         .to_string()
     }
 
+    /// A tool the model let go of: a background Bash command, a workflow.
+    fn make_background_launch(tool_use_id: &str) -> String {
+        serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "tool_use", "name": "Bash", "id": tool_use_id,
+                     "input": {"command": "gh run watch 1", "run_in_background": true}}
+                ],
+                "stop_reason": "tool_use",
+                "type": "message",
+                "role": "assistant"
+            }
+        })
+        .to_string()
+    }
+
+    /// How a finished task reports: an announcement on a line of its own, naming
+    /// the call it came from. Taken from a real transcript.
+    fn make_task_notification(tool_use_id: &str) -> String {
+        serde_json::json!({
+            "type": "queue-operation",
+            "operation": "enqueue",
+            "content": format!(
+                "<task-notification>\n<task-id>a5824f4b</task-id>\n<tool-use-id>{}</tool-use-id>\n<status>completed</status>\n</task-notification>",
+                tool_use_id
+            )
+        })
+        .to_string()
+    }
+
     fn make_user_text(text: &str) -> String {
         serde_json::json!({
             "type": "user",
@@ -1403,6 +1512,90 @@ mod tests {
         // second agent completes
         s.process_line(&make_tool_result("toolu_a2"));
         assert!(s.active_agents.is_empty());
+    }
+
+    #[test]
+    fn a_finished_async_agent_lets_the_session_go_quiet() {
+        // The bug this came from: an agent launched in the background finished,
+        // and the session stayed Active for an hour because nothing said so.
+        let mut s = DaemonState::new();
+        s.process_line(&make_assistant_agent_spawn("toolu_agent1"));
+        s.process_line(&make_async_tool_result("toolu_agent1"));
+        s.process_line(&make_end_turn("Off it goes."));
+        assert_eq!(s.state, SessionState::Active);
+        assert_eq!(s.activity, "subagent");
+
+        assert!(s.process_line(&make_task_notification("toolu_agent1")));
+        assert_eq!(s.state, SessionState::Idle);
+        assert_eq!(s.activity, "");
+        assert!(s.active_agents.is_empty());
+    }
+
+    #[test]
+    fn a_background_command_keeps_the_turn_open_until_it_reports() {
+        let mut s = DaemonState::new();
+        s.process_line(&make_background_launch("toolu_bash1"));
+        // Backgrounding reports back at once, and says nothing about being done.
+        s.process_line(&make_tool_result("toolu_bash1"));
+        s.process_line(&make_end_turn("Watching the run."));
+        assert_eq!(s.state, SessionState::Active);
+        assert_eq!(s.activity, "background");
+
+        s.process_line(&make_task_notification("toolu_bash1"));
+        assert_eq!(s.state, SessionState::Idle);
+    }
+
+    #[test]
+    fn the_last_one_to_finish_is_the_one_that_counts() {
+        let mut s = DaemonState::new();
+        s.process_line(&make_assistant_agent_spawn("toolu_agent1"));
+        s.process_line(&make_async_tool_result("toolu_agent1"));
+        s.process_line(&make_background_launch("toolu_bash1"));
+        s.process_line(&make_tool_result("toolu_bash1"));
+        s.process_line(&make_end_turn("Both running."));
+        assert_eq!(s.activity, "subagent");
+
+        s.process_line(&make_task_notification("toolu_agent1"));
+        assert_eq!(s.state, SessionState::Active);
+        assert_eq!(s.activity, "background");
+
+        s.process_line(&make_task_notification("toolu_bash1"));
+        assert_eq!(s.state, SessionState::Idle);
+    }
+
+    #[test]
+    fn a_task_finishing_mid_turn_does_not_interrupt_the_work_on_screen() {
+        let mut s = DaemonState::new();
+        s.process_line(&make_assistant_agent_spawn("toolu_agent1"));
+        s.process_line(&make_async_tool_result("toolu_agent1"));
+        // The model is on a tool of its own when the agent reports.
+        s.process_line(&make_assistant_tool_use("Bash", "toolu_other"));
+        assert_eq!(s.state, SessionState::Active);
+        let activity = s.activity.clone();
+
+        s.process_line(&make_task_notification("toolu_agent1"));
+        assert_eq!(s.state, SessionState::Active);
+        assert_eq!(s.activity, activity);
+    }
+
+    #[test]
+    fn an_announcement_for_something_else_changes_nothing() {
+        let mut s = DaemonState::new();
+        s.process_line(&make_assistant_agent_spawn("toolu_agent1"));
+        s.process_line(&make_async_tool_result("toolu_agent1"));
+        s.process_line(&make_end_turn("Off it goes."));
+
+        assert!(!s.process_line(&make_task_notification("toolu_somebody_else")));
+        assert_eq!(s.state, SessionState::Active);
+        assert_eq!(s.activity, "subagent");
+    }
+
+    #[test]
+    fn ids_are_read_out_of_the_line_as_written() {
+        let line = "<task-notification>\n<tool-use-id>toolu_a</tool-use-id>\n<tool-use-id> toolu_b </tool-use-id>";
+        assert_eq!(tool_use_ids(line), vec!["toolu_a".to_string(), "toolu_b".to_string()]);
+        assert!(tool_use_ids("nothing here").is_empty());
+        assert!(tool_use_ids("<tool-use-id>unclosed").is_empty());
     }
 
     #[test]
