@@ -557,6 +557,30 @@ impl DaemonState {
         }
     }
 
+    /// Lets go of whatever the replayed transcript says was still going on.
+    ///
+    /// The transcript can end mid-turn: the Claude desktop app evicts idle
+    /// session processes and stops them all when it quits, and it restores a
+    /// session by writing queued prompts — a finished background task's
+    /// notification, say — that the process it wrote them from never answered.
+    /// Replayed, those read as work in progress, and with nothing live to say
+    /// otherwise the session showed Active ("thinking") every time it was
+    /// opened, doing nothing. Only a finished turn that ended by asking the user
+    /// something still stands: that question is still unanswered.
+    fn settle_after_replay(&mut self) {
+        self.active_agents.clear();
+        self.background_tasks.clear();
+        self.open_tool_calls.clear();
+        self.awaiting_permission_for = None;
+        self.compacting = false;
+        let asked = self.state == SessionState::Waiting && self.activity == "question";
+        if self.state != SessionState::Idle && !asked {
+            self.state = SessionState::Idle;
+            self.activity = String::new();
+            self.event = "resumed".to_string();
+        }
+    }
+
     /// Takes the finished call's id out of whatever it was being tracked as, and
     /// lets the session go quiet once the last one is done.
     ///
@@ -935,6 +959,11 @@ fn daemon_mode(args: &[String]) -> Result<(), String> {
             Err(_) => break,
         }
     }
+
+    // A daemon is started by SessionStart, which fires for a new session
+    // process, and a turn cannot outlive the process that ran it. Whatever the
+    // replay says was still in flight died with the process before this one.
+    state.settle_after_replay();
 
     // Write current state and notify
     write_status(&ctx, &state);
@@ -1512,6 +1541,72 @@ mod tests {
         // second agent completes
         s.process_line(&make_tool_result("toolu_a2"));
         assert!(s.active_agents.is_empty());
+    }
+
+    /// A notification delivered as a prompt that nothing answered, as the Claude
+    /// desktop app leaves one when it restores a session. Taken from a real
+    /// transcript.
+    fn make_unanswered_notification_prompt() -> String {
+        serde_json::json!({
+            "type": "user",
+            "promptId": "70c3f2a1-6e0b-4d7e-9f1a-2b8e4c5d6a7f",
+            "message": {
+                "role": "user",
+                "content": "<task-notification>\n<task-id>b0ck73yex</task-id>\n<status>completed</status>\n</task-notification>"
+            }
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn a_replayed_prompt_nobody_answered_is_not_the_session_thinking() {
+        // The session every open of which showed Active doing nothing.
+        let mut s = DaemonState::new();
+        s.process_line(&make_end_turn("Temiz kapanış."));
+        s.process_line(&make_unanswered_notification_prompt());
+        assert_eq!(s.state, SessionState::Active);
+        assert_eq!(s.activity, "thinking");
+
+        s.settle_after_replay();
+        assert_eq!(s.state, SessionState::Idle);
+        assert_eq!(s.activity, "");
+    }
+
+    #[test]
+    fn a_turn_cut_off_mid_tool_does_not_run_on_after_a_restart() {
+        let mut s = DaemonState::new();
+        s.process_line(&make_assistant_tool_use("Bash", "toolu_cut"));
+        s.process_line(&make_assistant_agent_spawn("toolu_agent_cut"));
+        s.process_line(&make_background_launch("toolu_bg_cut"));
+        assert_eq!(s.state, SessionState::Active);
+
+        s.settle_after_replay();
+        assert_eq!(s.state, SessionState::Idle);
+        assert!(s.active_agents.is_empty());
+        assert!(s.background_tasks.is_empty());
+        assert!(s.open_tool_calls.is_empty());
+    }
+
+    #[test]
+    fn a_question_left_unanswered_still_stands_after_a_restart() {
+        let mut s = DaemonState::new();
+        s.process_line(&make_end_turn("Shall I ship it?"));
+        assert_eq!(s.state, SessionState::Waiting);
+
+        s.settle_after_replay();
+        assert_eq!(s.state, SessionState::Waiting);
+        assert_eq!(s.activity, "question");
+    }
+
+    #[test]
+    fn a_permission_prompt_goes_with_the_process_that_showed_it() {
+        let mut s = DaemonState::new();
+        s.process_line(&make_assistant_tool_use("Bash", "toolu_ask"));
+        s.process_signal(&serde_json::json!({"type": "permission_request", "tool_name": "Bash"}));
+        assert_eq!(s.state, SessionState::Waiting);
+
+        s.settle_after_replay();
+        assert_eq!(s.state, SessionState::Idle);
     }
 
     #[test]
